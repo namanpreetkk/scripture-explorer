@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 from sentence_transformers import SentenceTransformer
 
-st.set_page_config(page_title="Scripture Explorer", page_icon="🕉️", layout="wide")
+st.set_page_config(page_title="Scriptura", page_icon="🕉️", layout="wide")
 
 # -------------------- CLEANING --------------------
 ACCENTS = re.compile(r"[\u0951-\u0954\u1CD0-\u1CFF\uA8E0-\uA8FF\u1CEA\u00AC]")
