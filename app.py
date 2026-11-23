@@ -169,19 +169,75 @@ div[data-testid="stTextInput"] input::-webkit-input-placeholder {
 .scorefill { height: 100%; background: linear-gradient(90deg,#8a2a0e,#d4a017); border-radius: 8px; }
 /* Ensure informational messages remain legible */
 [data-testid="stAlert"] p { color: #24364b !important; }
+
+/* Animated sacred-geometry backdrop behind the Om hero */
+.scripture-hero {
+    position: relative; overflow: hidden; text-align: center;
+    padding: 50px 12px 28px; margin: 0 auto 22px;
+    min-height: 300px; isolation: isolate;
+}
+.scripture-hero .mandala {
+    position: absolute; z-index: -1; pointer-events: none;
+    width: min(780px, 92vw); height: 390px;
+    left: 50%; top: 48%; transform: translate(-50%, -50%);
+    opacity: .28;
+}
+.scripture-hero .mandala svg { width: 100%; height: 100%; overflow: visible; }
+.scripture-hero .orbit { transform-origin: 50% 50%; animation: mandala-spin 80s linear infinite; }
+.scripture-hero .orbit-reverse { transform-origin: 50% 50%; animation: mandala-spin-reverse 110s linear infinite; }
+.scripture-hero .pulse-ring { animation: ring-breathe 5s ease-in-out infinite; transform-origin: 50% 50%; }
+.scripture-hero .hero-om { font-size: 4.2rem; line-height: 1.15; color: #8a2a0e;
+    font-family: 'Tiro Devanagari Sanskrit', serif; animation: om-glow 4s ease-in-out infinite; }
+.scripture-hero h1 { position: relative; letter-spacing: .22em; margin: 12px 0 18px; }
+.scripture-hero .hero-subtitle { max-width: 900px; margin: 0 auto; color: #6b3a1e !important;
+    font-size: 1.35rem; font-style: italic; line-height: 1.55; position: relative; }
+.scripture-hero .hero-divider { width: 55%; border: 0; border-top: 1px solid #b4541a; margin: 25px auto 0; position: relative; }
+.hero-speck { position: absolute; width: 6px; height: 6px; border-radius: 50%; background: #d9a13a; opacity: .75; animation: speck-drift 7s ease-in-out infinite; }
+.hero-speck.s1 { left: 24%; top: 72%; animation-delay: -1s; }
+.hero-speck.s2 { left: 74%; top: 60%; animation-delay: -3s; }
+.hero-speck.s3 { left: 39%; top: 87%; animation-delay: -5s; }
+.hero-speck.s4 { left: 86%; top: 39%; animation-delay: -2s; }
+@keyframes mandala-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes mandala-spin-reverse { from { transform: rotate(360deg); } to { transform: rotate(0deg); } }
+@keyframes ring-breathe { 0%,100% { opacity: .45; transform: scale(.98); } 50% { opacity: .9; transform: scale(1.025); } }
+@keyframes om-glow { 0%,100% { text-shadow: 0 0 0 rgba(138,42,14,0); transform: translateY(0); } 50% { text-shadow: 0 0 18px rgba(180,84,26,.18); transform: translateY(-3px); } }
+@keyframes speck-drift { 0%,100% { transform: translateY(0) translateX(0); opacity: .45; } 50% { transform: translateY(-12px) translateX(5px); opacity: .9; } }
+@media (prefers-reduced-motion: reduce) { .scripture-hero * { animation: none !important; } }
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------- HEADER --------------------
 st.markdown("""
-<div style="text-align:center;padding:28px 8px 10px;">
-    <div style="font-size:3.2rem;color:#8a2a0e;font-family:'Tiro Devanagari Sanskrit',serif;">ॐ</div>
-    <h1 style="letter-spacing:.15em;">SCRIPTURE EXPLORER</h1>
-    <p style="font-size:1.3rem;color:#6b3a1e;font-style:italic;">
-    Identify the source of a verse, or search by meaning across<br>
-    the Mahabharata, Ramayana, Rigveda and Yajurveda.
-    </p>
-    <hr style="width:55%;border-top:1px solid #b4541a;">
+<div class="scripture-hero">
+  <div class="mandala" aria-hidden="true">
+    <svg viewBox="0 0 900 430" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <g class="orbit" stroke="#b4541a" stroke-width="2.2" stroke-linecap="round">
+        <circle class="pulse-ring" cx="450" cy="215" r="168" />
+        <circle cx="450" cy="215" r="205" />
+        <ellipse cx="450" cy="215" rx="78" ry="205" />
+        <ellipse cx="450" cy="215" rx="145" ry="205" />
+        <ellipse cx="450" cy="215" rx="205" ry="82" />
+        <ellipse cx="450" cy="215" rx="205" ry="145" />
+        <ellipse cx="450" cy="215" rx="205" ry="82" transform="rotate(30 450 215)" />
+        <ellipse cx="450" cy="215" rx="205" ry="82" transform="rotate(60 450 215)" />
+        <ellipse cx="450" cy="215" rx="205" ry="82" transform="rotate(90 450 215)" />
+        <ellipse cx="450" cy="215" rx="205" ry="82" transform="rotate(120 450 215)" />
+        <ellipse cx="450" cy="215" rx="205" ry="82" transform="rotate(150 450 215)" />
+      </g>
+      <g class="orbit-reverse" stroke="#c98c58" stroke-width="1.8" opacity=".75">
+        <circle cx="450" cy="215" r="120" />
+        <ellipse cx="450" cy="215" rx="120" ry="42" transform="rotate(45 450 215)" />
+        <ellipse cx="450" cy="215" rx="120" ry="42" transform="rotate(-45 450 215)" />
+        <ellipse cx="450" cy="215" rx="120" ry="42" transform="rotate(90 450 215)" />
+      </g>
+    </svg>
+  </div>
+  <span class="hero-speck s1"></span><span class="hero-speck s2"></span>
+  <span class="hero-speck s3"></span><span class="hero-speck s4"></span>
+  <div class="hero-om">ॐ</div>
+  <h1>SCRIPTURE EXPLORER</h1>
+  <p class="hero-subtitle">Identify the source of a verse, or search by meaning across the Mahabharata,<br>	he Ramayana, Rigveda and Yajurveda.</p>
+  <hr class="hero-divider">
 </div>
 """, unsafe_allow_html=True)
 
