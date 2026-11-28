@@ -264,16 +264,18 @@ html, body { overflow-x: hidden; }
 }
 h1, h2, h3, h4 { font-family: 'Cinzel', serif !important; color: var(--maroon) !important; }
 
-/* ---------- Tabs ---------- */
-div[data-baseweb="tab-list"] { gap: 6px; overflow-x: auto; }
-button[data-baseweb="tab"] { color: var(--maroon) !important; font-weight: 600 !important; }
-button[data-baseweb="tab"] p {
+/* ---------- Tabs (role-based, so it survives Streamlit markup changes) ---------- */
+[role="tablist"], div[data-baseweb="tab-list"] { gap: 6px; overflow-x: auto; }
+button[role="tab"], button[data-baseweb="tab"] { color: var(--maroon) !important; }
+button[role="tab"] *:not([data-testid="stIconMaterial"]),
+button[data-baseweb="tab"] *:not([data-testid="stIconMaterial"]) {
     color: var(--maroon) !important;
     font-family: var(--ui-font) !important;
-    font-size: 1.1rem !important;
+    font-size: 1.15rem !important;
     font-weight: 700 !important;
 }
-button[data-baseweb="tab"][aria-selected="true"] p { color: var(--rust) !important; }
+button[role="tab"][aria-selected="true"] *:not([data-testid="stIconMaterial"]),
+button[data-baseweb="tab"][aria-selected="true"] *:not([data-testid="stIconMaterial"]) { color: var(--rust) !important; }
 div[data-baseweb="tab-highlight"] { background-color: var(--rust) !important; transition: all .35s ease; }
 div[data-baseweb="tab-border"] { background-color: rgba(201,161,90,.55) !important; }
 
@@ -301,19 +303,25 @@ div[data-testid="stTextInput"] input::placeholder {
 }
 
 /* ---------- Selectbox (closed state) ----------
-   Streamlit paints its dark fill on an inner layer, so every layer is forced to parchment. */
+   Painted from the combobox outwards so it doesn't depend on Streamlit's internal class names. */
+div[data-testid="stSelectbox"] [role="combobox"],
+div[data-testid="stSelectbox"] [role="combobox"] *,
+div[data-testid="stSelectbox"] *:has(> [role="combobox"]),
+div[data-testid="stSelectbox"] *:has(> * > [role="combobox"]),
 div[data-testid="stSelectbox"] div[data-baseweb="select"],
 div[data-testid="stSelectbox"] div[data-baseweb="select"] div,
-div[data-testid="stSelectbox"] div[data-baseweb="select"] input {
+div[data-testid="stSelectbox"] input {
     background-color: var(--paper) !important;
     background-image: none !important;
 }
-div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+div[data-testid="stSelectbox"] *:has(> [role="combobox"]) {
     border: 1px solid var(--border) !important;
     border-radius: 8px !important;
     min-height: 46px;
 }
-div[data-testid="stSelectbox"] div[data-baseweb="select"] *,
+div[data-testid="stSelectbox"] [role="combobox"],
+div[data-testid="stSelectbox"] [role="combobox"] *:not([data-testid="stIconMaterial"]),
+div[data-testid="stSelectbox"] div[data-baseweb="select"] *:not([data-testid="stIconMaterial"]),
 div[data-testid="stSelectbox"] input {
     color: var(--ink) !important;
     -webkit-text-fill-color: var(--ink) !important;
@@ -328,17 +336,19 @@ div[data-testid="stSelectbox"]:has(input[disabled]) { opacity: .55; }
 div[data-baseweb="popover"],
 div[data-baseweb="popover"] > div,
 div[data-baseweb="menu"],
-ul[role="listbox"] {
+[role="listbox"],
+ul[data-testid="stSelectboxVirtualDropdown"],
+*:has(> [role="listbox"]):not(body):not(html),
+*:has(> * > [role="listbox"]):not(body):not(html) {
     background-color: var(--paper) !important;
     color: var(--ink) !important;
     border-radius: 8px !important;
 }
-div[data-baseweb="popover"] {
+*:has(> [role="listbox"]):not(body):not(html) {
     border: 1px solid var(--border) !important;
     box-shadow: 0 8px 24px rgba(74,15,15,.22) !important;
 }
-li[role="option"],
-div[role="option"] {
+[role="option"] {
     background-color: var(--paper) !important;
     color: var(--ink) !important;
     font-family: var(--ui-font) !important;
@@ -347,7 +357,7 @@ div[role="option"] {
     white-space: normal !important;
     line-height: 1.3 !important;
 }
-li[role="option"] *, div[role="option"] * {
+[role="option"] *:not([data-testid="stIconMaterial"]) {
     color: var(--ink) !important;
     font-family: var(--ui-font) !important;
     font-size: 1.08rem !important;
@@ -355,28 +365,28 @@ li[role="option"] *, div[role="option"] * {
     white-space: normal !important;
     background-color: transparent !important;
 }
-li[role="option"]:hover, li[role="option"][data-highlighted="true"],
-div[role="option"]:hover {
+[role="option"]:hover, [role="option"][data-highlighted="true"] {
     background-color: var(--paper-hover) !important;
 }
-li[role="option"][aria-selected="true"], div[role="option"][aria-selected="true"] {
+[role="option"][aria-selected="true"] {
     background-color: var(--paper-selected) !important;
 }
 
-/* ---------- Expander ---------- */
+/* ---------- Expander (icon font left alone so the arrow still renders) ---------- */
 [data-testid="stExpander"] details {
     background: rgba(255,250,240,.7) !important;
     border: 1px solid var(--border) !important;
     border-radius: 10px !important;
 }
 [data-testid="stExpander"] summary,
-[data-testid="stExpander"] summary * {
+[data-testid="stExpander"] summary *:not([data-testid="stIconMaterial"]) {
     color: var(--maroon) !important;
     font-family: var(--ui-font) !important;
     font-size: 1.1rem !important;
     font-weight: 700 !important;
 }
-[data-testid="stExpander"] summary svg { fill: var(--rust) !important; }
+[data-testid="stExpander"] summary [data-testid="stIconMaterial"],
+[data-testid="stExpander"] summary svg { color: var(--rust) !important; fill: var(--rust) !important; }
 
 /* ---------- Buttons ---------- */
 .stButton button, button[kind="primary"] {
@@ -432,7 +442,7 @@ div[data-testid="stSlider"] [data-testid="stTickBarMax"] {
 }
 
 /* ---------- Spinner ---------- */
-[data-testid="stSpinner"], [data-testid="stSpinner"] * {
+[data-testid="stSpinner"], [data-testid="stSpinner"] *:not([data-testid="stIconMaterial"]) {
     color: var(--ink-soft) !important;
     font-family: var(--ui-font) !important;
     font-size: 1.1rem !important;
@@ -585,8 +595,9 @@ div[data-testid="stSlider"] [data-testid="stTickBarMax"] {
     .verse-card { padding: 14px 14px; }
     .verse-card .verse-text { font-size: 1.2rem; line-height: 1.8; }
     .verse-card .card-top { flex-direction: column; align-items: flex-start; }
-    button[data-baseweb="tab"] { padding-left: 10px !important; padding-right: 10px !important; }
-    button[data-baseweb="tab"] p { font-size: 1rem !important; }
+    button[role="tab"], button[data-baseweb="tab"] { padding-left: 10px !important; padding-right: 10px !important; }
+    button[role="tab"] *:not([data-testid="stIconMaterial"]),
+    button[data-baseweb="tab"] *:not([data-testid="stIconMaterial"]) { font-size: 1rem !important; }
     .stButton button { width: 100%; }
 }
 </style>
