@@ -57,7 +57,8 @@ def build_browse_index(_idx):
     tree = {}
     for (s, c), g in df.groupby(["scripture", "chapter"], sort=False):
         tree.setdefault(s, {})[c] = g.index.tolist()
-    return tree, verse_no.to_numpy()
+    order = {s: sorted(cmap, key=natural_key) for s, cmap in tree.items()}
+    return tree, verse_no.to_numpy(), order
 
 
 @st.cache_resource
@@ -71,7 +72,7 @@ def load_assets():
 
 clf, emb, idx, model = load_assets()
 SCRIPTURES = sorted(idx.scripture.unique())
-BROWSE_TREE, VERSE_NO = build_browse_index(idx)
+BROWSE_TREE, VERSE_NO, CHAPTER_ORDER = build_browse_index(idx)
 
 
 # -------------------- PREDICTION --------------------
@@ -83,20 +84,34 @@ def predict_scripture(verse):
 
 
 # -------------------- SEMANTIC SEARCH --------------------
-def search(query, top_k=5, scripture="All"):
+def search(query, top_k=5, scripture="All", chapter="All", exclude=None):
     if not query or not query.strip():
         return pd.DataFrame()
 
     q = model.encode(["query: " + query], normalize_embeddings=True)[0]
-    sims = emb @ q
+    sims = (emb @ q).astype(np.float64)
 
     if scripture != "All":
-        sims = np.where(idx.scripture.values == scripture, sims, -1)
+        chapter_rows = BROWSE_TREE.get(scripture, {}).get(chapter)
+        if chapter != "All" and chapter_rows is not None:
+            mask = np.zeros(len(sims), dtype=bool)
+            mask[chapter_rows] = True
+        else:
+            mask = idx.scripture.values == scripture
+        sims = np.where(mask, sims, -np.inf)
+
+    if exclude is not None:
+        sims[int(exclude)] = -np.inf
 
     top = np.argsort(-sims)[:int(top_k)]
+    top = top[np.isfinite(sims[top])]
+    if len(top) == 0:
+        return pd.DataFrame()
+
     out = idx.iloc[top].copy()
     out["raw"] = out.raw.str.replace(r"\s+", " ", regex=True)
     out["translation"] = out.translation.fillna("")
+    out.insert(0, "row_id", top)
     out.insert(0, "score", sims[top].round(3))
     return out.rename(columns={"raw": "verse", "translation": "English (Ramayana only)"}).reset_index(drop=True)
 
@@ -114,11 +129,11 @@ QUERY_EXAMPLES = {
 
 PH_SCR = "Select a scripture"
 PH_CH = "Select a chapter"
-PH_V = -1  # placeholder for the verse selectbox (options are row numbers)
+PH_V = -1  # placeholder for verse selectboxes (their options are row numbers)
 
 
 def verse_text(i):
-    return re.sub(r"\s+", " ", str(idx["raw"].iat[i])).strip()
+    return re.sub(r"\s+", " ", str(idx["raw"].iat[int(i)])).strip()
 
 
 def verse_label(i):
@@ -128,27 +143,70 @@ def verse_label(i):
     return f"{VERSE_NO[i]} — {t[:38]}{'…' if len(t) > 38 else ''}"
 
 
-# Callbacks keep the three linked dropdowns consistent.
-def on_scripture_change():
-    st.session_state["browse_chapter"] = PH_CH
-    st.session_state["browse_verse"] = PH_V
+def make_picker_callbacks(prefix, target_key):
+    """Callbacks that keep a scripture -> chapter -> verse picker consistent."""
+    def on_scripture():
+        st.session_state[f"{prefix}_chapter"] = PH_CH
+        st.session_state[f"{prefix}_verse"] = PH_V
+
+    def on_chapter():
+        st.session_state[f"{prefix}_verse"] = PH_V
+
+    def on_verse():
+        i = st.session_state.get(f"{prefix}_verse", PH_V)
+        if i != PH_V:
+            st.session_state[target_key] = verse_text(i)
+
+    return on_scripture, on_chapter, on_verse
 
 
-def on_chapter_change():
-    st.session_state["browse_verse"] = PH_V
+def verse_picker(prefix, target_key):
+    """Three linked dropdowns covering the whole dataset. Choosing a verse fills `target_key`."""
+    on_scr, on_ch, on_v = make_picker_callbacks(prefix, target_key)
+    col_s, col_c, col_v = st.columns([1, 1, 2])
+
+    with col_s:
+        st.selectbox("Scripture", [PH_SCR] + SCRIPTURES,
+                     key=f"{prefix}_scripture", on_change=on_scr)
+    scr = st.session_state.get(f"{prefix}_scripture", PH_SCR)
+    chapter_map = BROWSE_TREE.get(scr, {})
+    chapters = CHAPTER_ORDER.get(scr, [])
+
+    with col_c:
+        st.selectbox("Chapter", [PH_CH] + chapters,
+                     key=f"{prefix}_chapter", on_change=on_ch, disabled=not chapters)
+    ch = st.session_state.get(f"{prefix}_chapter", PH_CH)
+    verse_ids = chapter_map.get(ch, [])
+
+    with col_v:
+        st.selectbox("Verse", [PH_V] + verse_ids,
+                     key=f"{prefix}_verse", format_func=verse_label,
+                     on_change=on_v, disabled=not verse_ids)
+
+    if chapters:
+        total = sum(len(v) for v in chapter_map.values())
+        extra = f" · this chapter has {len(verse_ids):,}" if verse_ids else ""
+        st.caption(f"{scr}: {len(chapters):,} chapters, {total:,} verses{extra}")
 
 
-def on_verse_change():
-    i = st.session_state.get("browse_verse", PH_V)
-    if i != PH_V:
-        st.session_state["verse_input"] = verse_text(i)
-
-
+# Search-tab callbacks
 def load_query_example():
     name = st.session_state.get("query_example", "Select an example")
     text, scripture = QUERY_EXAMPLES.get(name, ("", "All"))
     st.session_state["query_input"] = text
     st.session_state["scripture_filter"] = scripture
+    st.session_state["chapter_filter"] = "All"
+
+
+def on_filter_scripture():
+    st.session_state["chapter_filter"] = "All"
+
+
+def use_as_query(i):
+    """'Find similar verses' button: use a result as the next query and skip itself."""
+    st.session_state["query_input"] = verse_text(i)
+    st.session_state["exclude_row"] = int(i)
+    st.session_state["auto_search"] = True
 
 
 # -------------------- THEME / RESPONSIVE CSS --------------------
@@ -216,7 +274,7 @@ button[data-baseweb="tab"] p {
     font-weight: 700 !important;
 }
 button[data-baseweb="tab"][aria-selected="true"] p { color: var(--rust) !important; }
-div[data-baseweb="tab-highlight"] { background-color: var(--rust) !important; }
+div[data-baseweb="tab-highlight"] { background-color: var(--rust) !important; transition: all .35s ease; }
 div[data-baseweb="tab-border"] { background-color: rgba(201,161,90,.55) !important; }
 
 /* ---------- Text inputs ---------- */
@@ -243,7 +301,7 @@ div[data-testid="stTextInput"] input::placeholder {
 }
 
 /* ---------- Selectbox (closed state) ----------
-   Streamlit paints the dark fill on an inner layer, so every layer is forced to parchment. */
+   Streamlit paints its dark fill on an inner layer, so every layer is forced to parchment. */
 div[data-testid="stSelectbox"] div[data-baseweb="select"],
 div[data-testid="stSelectbox"] div[data-baseweb="select"] div,
 div[data-testid="stSelectbox"] div[data-baseweb="select"] input {
@@ -305,13 +363,30 @@ li[role="option"][aria-selected="true"], div[role="option"][aria-selected="true"
     background-color: var(--paper-selected) !important;
 }
 
+/* ---------- Expander ---------- */
+[data-testid="stExpander"] details {
+    background: rgba(255,250,240,.7) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 10px !important;
+}
+[data-testid="stExpander"] summary,
+[data-testid="stExpander"] summary * {
+    color: var(--maroon) !important;
+    font-family: var(--ui-font) !important;
+    font-size: 1.1rem !important;
+    font-weight: 700 !important;
+}
+[data-testid="stExpander"] summary svg { fill: var(--rust) !important; }
+
 /* ---------- Buttons ---------- */
 .stButton button, button[kind="primary"] {
+    position: relative; overflow: hidden;
     background: linear-gradient(135deg, var(--maroon-2), var(--maroon)) !important;
     color: var(--gold-soft) !important;
     border: 1px solid var(--gold) !important;
     border-radius: 7px !important;
     min-height: 46px;
+    transition: transform .15s ease, box-shadow .2s ease, filter .2s ease;
 }
 .stButton button p, button[kind="primary"] p {
     color: var(--gold-soft) !important;
@@ -319,7 +394,29 @@ li[role="option"][aria-selected="true"], div[role="option"][aria-selected="true"
     font-weight: 700 !important;
     letter-spacing: .12em;
 }
-.stButton button:hover { border-color: var(--rust) !important; filter: brightness(1.12); }
+.stButton button::after {
+    content: ""; position: absolute; top: 0; left: 0; width: 40%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(246,217,138,.38), transparent);
+    transform: translateX(-130%) skewX(-20deg);
+    pointer-events: none;
+}
+.stButton button:hover { border-color: var(--rust) !important; filter: brightness(1.12); box-shadow: 0 6px 16px rgba(74,15,15,.28); }
+.stButton button:hover::after { animation: btn-shine .9s ease; }
+.stButton button:active { transform: scale(.97); }
+
+/* secondary "find similar" button inside results */
+[class*="st-key-similar_"] button {
+    background: transparent !important;
+    border: 1px solid var(--border) !important;
+    min-height: 38px;
+}
+[class*="st-key-similar_"] button p {
+    color: var(--rust) !important;
+    font-family: var(--ui-font) !important;
+    font-size: 1.05rem !important;
+    letter-spacing: .02em;
+}
+[class*="st-key-similar_"] button:hover { background: var(--paper-hover) !important; }
 
 /* ---------- Slider ---------- */
 div[data-testid="stSlider"] [role="slider"] {
@@ -334,11 +431,11 @@ div[data-testid="stSlider"] [data-testid="stTickBarMax"] {
     font-weight: 700 !important;
 }
 
-/* ---------- Progress bars ---------- */
-div[data-testid="stProgress"] > div > div { background-color: #ead9bd !important; }
-div[data-testid="stProgress"] [role="progressbar"] { background-color: #ead9bd !important; }
-div[data-testid="stProgress"] [role="progressbar"] > div {
-    background: linear-gradient(90deg, var(--rust), var(--gold)) !important;
+/* ---------- Spinner ---------- */
+[data-testid="stSpinner"], [data-testid="stSpinner"] * {
+    color: var(--ink-soft) !important;
+    font-family: var(--ui-font) !important;
+    font-size: 1.1rem !important;
 }
 
 /* ---------- Alerts ---------- */
@@ -356,9 +453,19 @@ div[data-testid="stProgress"] [role="progressbar"] > div {
     border-radius: 9px; background: rgba(255,250,240,.97);
     overflow-wrap: anywhere;
 }
+.verse-card.rise { animation: card-rise .65s cubic-bezier(.2,.7,.2,1) backwards; }
+.verse-card.top-hit { animation: card-rise .65s cubic-bezier(.2,.7,.2,1) backwards, top-glow 4s ease-in-out 1.2s infinite; }
 .verse-card .card-top {
     display: flex; justify-content: space-between; flex-wrap: wrap;
     gap: 8px 12px; align-items: center;
+}
+.verse-card .lead { display: inline-flex; align-items: center; gap: 10px; }
+.verse-card .rank {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--gold), #b4741a);
+    color: #3b1d0e !important; font-family: 'Cinzel', serif; font-weight: 700; font-size: .8rem;
+    animation: badge-pop .5s cubic-bezier(.3,1.5,.5,1) backwards;
 }
 .verse-card .tag {
     background: var(--maroon-2); color: var(--gold-soft) !important;
@@ -378,8 +485,22 @@ div[data-testid="stProgress"] [role="progressbar"] > div {
 .verse-card .kicker { font-size: .85rem; letter-spacing: .18em; color: #7a2e12; }
 .verse-card .big { font-size: clamp(1.4rem, 5vw, 2rem); color: var(--maroon); font-family: 'Cinzel', serif; }
 .verse-card .conf { font-size: 1.15rem; color: var(--ink-soft); font-style: italic; font-family: var(--ui-font); }
+.bd-row { margin: 6px 0 12px; }
+.bd-head {
+    display: flex; justify-content: space-between; gap: 12px;
+    font-family: var(--ui-font); font-weight: 700; font-size: 1.15rem; color: var(--maroon);
+}
 .scorebar { height: 10px; background: #ead9bd; border-radius: 8px; overflow: hidden; margin: 8px 0 12px; }
-.scorefill { height: 100%; background: linear-gradient(90deg,#8a2a0e,#d4a017); border-radius: 8px; }
+.bd-row .scorebar { margin: 4px 0 0; }
+.scorefill {
+    height: 100%; background: linear-gradient(90deg,#8a2a0e,#d4a017); border-radius: 8px;
+    transform-origin: left center;
+    animation: fill-grow 1.1s cubic-bezier(.2,.7,.2,1) backwards;
+}
+.results-head {
+    font-family: var(--ui-font); font-size: 1.25rem; color: var(--ink-soft);
+    margin: 18px 0 2px; animation: card-rise .5s ease backwards;
+}
 
 /* ---------- Hero ---------- */
 .scripture-hero {
@@ -424,12 +545,33 @@ div[data-testid="stProgress"] [role="progressbar"] > div {
 .hero-speck.s2 { left: 74%; top: 60%; animation-delay: -3s; }
 .hero-speck.s3 { left: 39%; top: 87%; animation-delay: -5s; }
 .hero-speck.s4 { left: 86%; top: 39%; animation-delay: -2s; }
+/* Sanskrit syllables that drift up behind the title */
+.glyph {
+    position: absolute; opacity: 0; pointer-events: none; color: var(--rust);
+    font-family: var(--deva-font); animation: glyph-float 10s ease-in-out infinite;
+}
+.glyph.g1 { left: 9%;  top: 58%; font-size: 2rem;   animation-delay: -2s; }
+.glyph.g2 { left: 89%; top: 74%; font-size: 1.7rem; animation-delay: -6s; }
+.glyph.g3 { left: 17%; top: 22%; font-size: 1.5rem; animation-delay: -8s; }
+.glyph.g4 { left: 81%; top: 20%; font-size: 2.2rem; animation-delay: -4s; }
+
 @keyframes mandala-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 @keyframes mandala-spin-reverse { from { transform: rotate(360deg); } to { transform: rotate(0deg); } }
 @keyframes ring-breathe { 0%,100% { opacity: .45; transform: scale(.98); } 50% { opacity: .9; transform: scale(1.025); } }
 @keyframes om-glow { 0%,100% { text-shadow: 0 0 0 rgba(138,42,14,0); transform: translateY(0); } 50% { text-shadow: 0 0 18px rgba(180,84,26,.18); transform: translateY(-3px); } }
 @keyframes speck-drift { 0%,100% { transform: translateY(0) translateX(0); opacity: .45; } 50% { transform: translateY(-12px) translateX(5px); opacity: .9; } }
-@media (prefers-reduced-motion: reduce) { .scripture-hero * { animation: none !important; } }
+@keyframes glyph-float { 0% { transform: translateY(24px); opacity: 0; } 25% { opacity: .2; } 75% { opacity: .16; } 100% { transform: translateY(-70px); opacity: 0; } }
+@keyframes card-rise { from { opacity: 0; transform: translateY(26px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes fill-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes badge-pop { 0% { transform: scale(0) rotate(-40deg); } 100% { transform: scale(1) rotate(0); } }
+@keyframes top-glow { 0%,100% { box-shadow: 0 0 0 rgba(212,160,23,0); } 50% { box-shadow: 0 0 24px rgba(212,160,23,.38); } }
+@keyframes btn-shine { from { transform: translateX(-130%) skewX(-20deg); } to { transform: translateX(300%) skewX(-20deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+    .scripture-hero *, .glyph, .verse-card, .verse-card *, .scorefill, .results-head, .stButton button::after {
+        animation: none !important; transition: none !important;
+    }
+}
 
 .site-footer { text-align: center; color: var(--ink-soft); font-style: italic; padding: 20px 0; font-family: var(--ui-font); font-size: 1.05rem; }
 
@@ -439,6 +581,7 @@ div[data-testid="stProgress"] [role="progressbar"] > div {
     .scripture-hero { padding: 26px 4px 20px; margin-bottom: 14px; }
     .scripture-hero .mandala { width: 120%; }
     .scripture-hero .hero-divider { width: 70%; margin-top: 18px; }
+    .glyph.g3, .glyph.g4 { display: none; }
     .verse-card { padding: 14px 14px; }
     .verse-card .verse-text { font-size: 1.2rem; line-height: 1.8; }
     .verse-card .card-top { flex-direction: column; align-items: flex-start; }
@@ -478,6 +621,10 @@ HERO_HTML = (
     '</div>'
     '<span class="hero-speck s1"></span><span class="hero-speck s2"></span>'
     '<span class="hero-speck s3"></span><span class="hero-speck s4"></span>'
+    '<span class="glyph g1" aria-hidden="true">श्री</span>'
+    '<span class="glyph g2" aria-hidden="true">धर्म</span>'
+    '<span class="glyph g3" aria-hidden="true">सत्य</span>'
+    '<span class="glyph g4" aria-hidden="true">ॐ</span>'
     '<div class="hero-om">ॐ</div>'
     '<h1>SCRIPTURE EXPLORER</h1>'
     '<p class="hero-subtitle">Identify the source of a verse, or search by meaning across the '
@@ -490,45 +637,9 @@ st.markdown(HERO_HTML, unsafe_allow_html=True)
 # -------------------- TABS --------------------
 tab1, tab2 = st.tabs(["Identify a Verse", "Search by Meaning"])
 
+# ===== TAB 1: IDENTIFY =====
 with tab1:
-    # Browse the whole dataset: scripture -> chapter -> verse
-    col_s, col_c, col_v = st.columns([1, 1, 2])
-    with col_s:
-        st.selectbox(
-            "Scripture",
-            [PH_SCR] + SCRIPTURES,
-            key="browse_scripture",
-            on_change=on_scripture_change,
-        )
-    scr = st.session_state.get("browse_scripture", PH_SCR)
-    chapter_map = BROWSE_TREE.get(scr, {})
-    chapters = sorted(chapter_map, key=natural_key)
-
-    with col_c:
-        st.selectbox(
-            "Chapter",
-            [PH_CH] + chapters,
-            key="browse_chapter",
-            on_change=on_chapter_change,
-            disabled=not chapters,
-        )
-    ch = st.session_state.get("browse_chapter", PH_CH)
-    verse_ids = chapter_map.get(ch, [])
-
-    with col_v:
-        st.selectbox(
-            "Verse",
-            [PH_V] + verse_ids,
-            key="browse_verse",
-            format_func=verse_label,
-            on_change=on_verse_change,
-            disabled=not verse_ids,
-        )
-
-    if chapters:
-        total = sum(len(v) for v in chapter_map.values())
-        st.caption(f"{scr}: {len(chapters):,} chapters, {total:,} verses"
-                   + (f" · this chapter has {len(verse_ids):,}" if verse_ids else ""))
+    verse_picker("browse", "verse_input")
 
     verse = st.text_area(
         "Verse (Devanagari)",
@@ -547,7 +658,7 @@ with tab1:
             else:
                 top, prob = ranked[0]
                 st.markdown(
-                    '<div class="verse-card result-main">'
+                    '<div class="verse-card result-main rise top-hit">'
                     '<div class="kicker">MOST LIKELY SOURCE</div>'
                     f'<div class="big">{html.escape(str(top))}</div>'
                     f'<div class="conf">{prob*100:.1f}% confidence</div>'
@@ -555,11 +666,21 @@ with tab1:
                     unsafe_allow_html=True,
                 )
                 st.markdown("### Prediction Breakdown")
-                for name, value in ranked:
-                    st.markdown(f"**{html.escape(str(name))} — {value*100:.1f}%**")
-                    st.progress(float(value))
+                rows = ""
+                for n, (name, value) in enumerate(ranked):
+                    delay = 0.15 + n * 0.12
+                    rows += (
+                        '<div class="bd-row">'
+                        f'<div class="bd-head"><span>{html.escape(str(name))}</span><span>{value*100:.1f}%</span></div>'
+                        '<div class="scorebar">'
+                        f'<div class="scorefill" style="width:{value*100:.1f}%;animation-delay:{delay:.2f}s;"></div>'
+                        '</div></div>'
+                    )
+                st.markdown(f'<div class="verse-card rise" style="animation-delay:.1s;">{rows}</div>',
+                            unsafe_allow_html=True)
 
 
+# ===== TAB 2: SEARCH BY MEANING =====
 with tab2:
     st.selectbox(
         "Choose an example query",
@@ -568,47 +689,94 @@ with tab2:
         on_change=load_query_example,
     )
     query = st.text_input(
-        "Query (Hindi or Sanskrit works best)",
+        "Query (Hindi, Sanskrit or English)",
         placeholder="धर्म का पालन करना चाहिए",
         key="query_input",
     )
-    scripture_options = ["All"] + SCRIPTURES
-    st.selectbox("Restrict to", scripture_options, key="scripture_filter")
-    k = st.slider("Number of results", min_value=1, max_value=10, value=5)
 
-    if st.button("SEARCH", type="primary", key="search_button"):
+    with st.expander("Or start from any verse in the corpus"):
+        verse_picker("qpick", "query_input")
+
+    f_scr, f_ch, f_k = st.columns([1, 1, 1])
+    with f_scr:
+        st.selectbox("Restrict to scripture", ["All"] + SCRIPTURES,
+                     key="scripture_filter", on_change=on_filter_scripture)
+    scr_f = st.session_state.get("scripture_filter", "All")
+    ch_options = CHAPTER_ORDER.get(scr_f, [])
+    with f_ch:
+        st.selectbox("Restrict to chapter", ["All"] + ch_options,
+                     key="chapter_filter", disabled=not ch_options)
+    with f_k:
+        k = st.slider("Number of results", min_value=1, max_value=10, value=5)
+
+    auto = st.session_state.pop("auto_search", False)
+    exclude = st.session_state.pop("exclude_row", None)
+    clicked = st.button("SEARCH", type="primary", key="search_button")
+
+    if clicked or auto:
         if not query.strip():
-            st.info("Choose an example query or type one.")
+            st.info("Type a query, choose an example, or start from a verse.")
         else:
-            results = search(query, k, st.session_state.get("scripture_filter", "All"))
-            if results.empty:
-                st.info("No verses found.")
-            else:
-                for _, row in results.iterrows():
-                    score = float(row["score"])
-                    safe_scripture = html.escape(str(row["scripture"]))
-                    safe_ref = html.escape(str(row["ref"]))
-                    safe_verse = html.escape(str(row["verse"]))
-                    translation = str(row.get("English (Ramayana only)", "") or "")
-                    safe_translation = html.escape(translation)
-                    width = max(0, min(100, score * 100))
-                    trans_html = (
-                        f'<div class="translation">{safe_translation}</div>'
-                        if translation.strip() else ""
-                    )
-                    st.markdown(
-                        '<div class="verse-card">'
-                        '<div class="card-top">'
-                        f'<span class="tag">{safe_scripture.upper()}</span>'
-                        f'<span class="ref">{safe_ref}</span>'
-                        f'<span class="sim">SIMILARITY {score:.3f}</span>'
-                        '</div>'
-                        f'<div class="scorebar"><div class="scorefill" style="width:{width:.1f}%;"></div></div>'
-                        f'<div class="verse-text">{safe_verse}</div>'
-                        f'{trans_html}'
-                        '</div>',
-                        unsafe_allow_html=True,
-                    )
+            with st.spinner("Searching the scriptures…"):
+                res = search(
+                    query, k, scr_f,
+                    st.session_state.get("chapter_filter", "All"),
+                    exclude if auto else None,
+                )
+            st.session_state["search_results"] = res
+            st.session_state["search_query"] = query.strip()
+
+    results = st.session_state.get("search_results")
+    if results is not None:
+        if results.empty:
+            st.info("No verses found.")
+        else:
+            shown_query = html.escape(st.session_state.get("search_query", ""))
+            if len(shown_query) > 90:
+                shown_query = shown_query[:90] + "…"
+            st.markdown(
+                f'<div class="results-head">{len(results)} verses closest in meaning to <em>{shown_query}</em></div>',
+                unsafe_allow_html=True,
+            )
+
+            smin, smax = float(results["score"].min()), float(results["score"].max())
+            span = smax - smin
+
+            for rank, (_, row) in enumerate(results.iterrows()):
+                score = float(row["score"])
+                # Bar length is relative within this result set so differences are visible.
+                width = 100.0 if span < 1e-9 else 38 + 62 * (score - smin) / span
+                delay = rank * 0.1
+                translation = str(row.get("English (Ramayana only)", "") or "")
+                trans_html = (
+                    f'<div class="translation">{html.escape(translation)}</div>'
+                    if translation.strip() else ""
+                )
+                cls = "verse-card top-hit" if rank == 0 else "verse-card rise"
+                st.markdown(
+                    f'<div class="{cls}" style="animation-delay:{delay:.2f}s;">'
+                    '<div class="card-top">'
+                    '<span class="lead">'
+                    f'<span class="rank" style="animation-delay:{delay + .2:.2f}s;">{rank + 1}</span>'
+                    f'<span class="tag">{html.escape(str(row["scripture"])).upper()}</span>'
+                    '</span>'
+                    f'<span class="ref">{html.escape(str(row["ref"]))}</span>'
+                    f'<span class="sim">SIMILARITY {score:.3f}</span>'
+                    '</div>'
+                    '<div class="scorebar">'
+                    f'<div class="scorefill" style="width:{width:.1f}%;animation-delay:{delay + .25:.2f}s;"></div>'
+                    '</div>'
+                    f'<div class="verse-text">{html.escape(str(row["verse"]))}</div>'
+                    f'{trans_html}'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+                st.button(
+                    "Find similar verses",
+                    key=f"similar_{rank}",
+                    on_click=use_as_query,
+                    args=(int(row["row_id"]),),
+                )
 
 st.markdown(
     '<div class="site-footer">Data: DharmicData corpus. Verse-level Sanskrit text.</div>',
